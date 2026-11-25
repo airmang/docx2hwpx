@@ -454,6 +454,8 @@ class HwpxWriter:
         hidx = -1
         cur_hdr = {"header": {}, "footer": {}}
         body_sink = None
+        if len(secs) > 1 and not secs[-1].blocks and not _has_text(secs[-1].headers.default or []):
+            secs = secs[:-1]  # a trailing empty section is not a page of its own
         for i, sec in enumerate(secs):
             continuous = (i > 0 and sec.start_type == "continuous" and prev_written is not None
                           and _same_page(sec, prev_written))
@@ -521,6 +523,13 @@ class HwpxWriter:
                                   gutter=hu(m.get("gutter", 0)), section=idx)
         if sec.pg_start is not None:
             self.doc.page.set_start_numbers(page=sec.pg_start, section=idx)
+        # note numbers as Hangul gives a converted Word document: plain superscript digits
+        for setter in (self.doc.page.set_footnote_shape, self.doc.page.set_endnote_shape):
+            try:
+                setter(number_format="DIGIT", prefix="", suffix="", superscript=True, separator_width_mm=0.25,
+                       between_notes=283, below_line=0, above_line=1000, section=idx)
+            except Exception:  # noqa: BLE001
+                setter(number_format="DIGIT", prefix="", suffix="", superscript=True, section=idx)
         self._section_pg_fmt = PAGE_FORMAT.get(sec.pg_fmt or "", "DIGIT")
 
     def add_columns(self, p, sec: M.Section):
@@ -643,6 +652,12 @@ class HwpxWriter:
             note = p.add_footnote("", char_pr_id_ref=cp)
         else:
             note = p.add_endnote("", char_pr_id_ref=cp)
+        # the engine numbers a new note "1)"; Hangul writes Word's notes as superscript digits
+        note.element.attrib.pop("suffixChar", None)
+        for fmt in note.element.iter(f"{HP}autoNumFormat"):
+            fmt.set("suffixChar", "")
+            fmt.set("prefixChar", "")
+            fmt.set("supscript", "1")
         first = note.paragraphs[0] if note.paragraphs else None
 
         def make(pp, cp_, n=note):
