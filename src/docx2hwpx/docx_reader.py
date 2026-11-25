@@ -643,8 +643,8 @@ class DocxReader:
             pass
         elif word in ("FORMTEXT", "FORMCHECKBOX", "FORMDROPDOWN"):
             self.losses.add("form_control")
-        elif word not in ("EQ",):
-            self.losses.add("field")
+        elif word not in ("EQ",) and len(state["story"].fields) == 1:
+            self.losses.add("field")  # fields nested in a field (page refs of a TOC) are part of it
 
     def _emit_raw(self, state, item, target):
         """Emit while the field itself is in its result phase (bypassing its own skip)."""
@@ -688,8 +688,8 @@ class DocxReader:
                 anchor = el.get(W + "anchor")
                 if anchor:
                     url += "#" + anchor
-        if url is None:
-            self.losses.add("internal_link")
+        if url is None and not state["story"].fields:
+            self.losses.add("internal_link")  # (a TOC's entry links belong to the TOC field)
         items: list = []
         self._inline_children(el, state, items)
         if self._skipping(state):
@@ -711,6 +711,30 @@ class DocxReader:
             self._emit(state, M.Text(text, dict(state["base"])), target)
 
     # ---------------------------------------------------------------- drawings
+    @staticmethod
+    def _anchor(holder) -> dict:
+        """Placement of a floating drawing: wrap, relative-to frames, alignment or offsets."""
+        out = {"wrap": "square", "behind": holder.get("behindDoc") in ("1", "true"),
+               "overlap": holder.get("allowOverlap") not in ("0", "false")}
+        for tag in ("wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom", "wrapNone"):
+            if holder.find(WP + tag) is not None:
+                out["wrap"] = tag[4:].lower()
+                break
+        for axis, tag in (("h", "positionH"), ("v", "positionV")):
+            el = holder.find(WP + tag)
+            if el is None:
+                continue
+            out[axis + "_rel"] = el.get("relativeFrom") or ""
+            al = el.find(WP + "align")
+            off = el.find(WP + "posOffset")
+            if al is not None and al.text:
+                out[axis + "_align"] = al.text.strip()
+            elif off is not None and off.text:
+                out[axis + "_off"] = to_int(off.text.strip(), 0)
+        for k in ("distT", "distB", "distL", "distR"):
+            out[k] = to_int(holder.get(k), 0)
+        return out
+
     def _image(self, part: str, rid: str | None, cx: int, cy: int, rpr: dict, floating: bool):
         rel = self.rel_target(part, rid)
         if not rel or rel[2] == "External":
@@ -723,8 +747,6 @@ class DocxReader:
         if not fmt or not data:
             self.losses.add("image_unsupported")
             return None
-        if floating:
-            self.losses.add("floating_picture")
         return M.Image(data, fmt, max(cx, 1), max(cy, 1), rpr, floating)
 
     def _object(self, el, rpr, state, target):
@@ -748,6 +770,8 @@ class DocxReader:
                         continue
                     img = self._image(ctx.part, rid, cx, cy, rpr, floating)
                     if img is not None:
+                        if floating:
+                            img.anchor = self._anchor(holder)
                         self._emit(state, img, target)
                 elif uri == WPS_URI:
                     txbx = gd.find(f".//{W}txbxContent")
@@ -781,6 +805,9 @@ class DocxReader:
                     self.losses.add("ole_object")
                 img = self._image(ctx.part, imagedata.get(R + "id"), cx, cy, rpr, floating)
                 if img is not None:
+                    if floating:
+                        self.losses.add("floating_picture")  # VML placement: kept in the line
+                        img.floating = False
                     self._emit(state, img, target)
             elif tag == "object":
                 self.losses.add("ole_dropped")

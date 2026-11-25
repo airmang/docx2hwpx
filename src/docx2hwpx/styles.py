@@ -175,6 +175,18 @@ def parse_ppr(el) -> dict:
             out["tabs"] = tabs
         elif tag == "textDirection":
             out["textDirection"] = wval(child)
+        elif tag == "pBdr":
+            bdr = {}
+            for side_el in child:
+                if not isinstance(side_el.tag, str):
+                    continue
+                side = etree.QName(side_el).localname
+                side = {"start": "left", "end": "right"}.get(side, side)
+                val = side_el.get(W + "val") or "nil"
+                if side in ("top", "bottom", "left", "right") and val not in ("nil", "none"):
+                    bdr[side] = (val, to_int(side_el.get(W + "sz"), 4), side_el.get(W + "color") or "auto",
+                                 to_int(side_el.get(W + "space"), 0))
+            out["pBdr"] = bdr
     return out
 
 

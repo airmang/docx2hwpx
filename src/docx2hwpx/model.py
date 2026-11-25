@@ -44,6 +44,7 @@ class Image:
     cy: int  # EMU
     rpr: dict
     floating: bool = False
+    anchor: dict | None = None  # floating placement read from wp:anchor (EMU offsets)
 
 
 Inline = Union[Text, Field, NoteRef, Hyperlink, Image]

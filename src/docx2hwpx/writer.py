@@ -310,14 +310,22 @@ class HwpxWriter:
         if heading is None:
             heading = {"type": "NONE", "idRef": 0, "level": 0}
         tab_id = self.tab_definition(ppr.get("tabs"), left + min(first, 0))
+        border = None
+        if ppr.get("pBdr") or ppr.get("shd"):
+            bdr = ppr.get("pBdr") or {}
+            bf = self.border_fill({k: v[:3] for k, v in bdr.items()}, ppr.get("shd"))
+            space = {k: v[3] for k, v in bdr.items()}
+            border = {"borderFillIDRef": bf, "offsetLeft": space.get("left", 4) * 100,
+                      "offsetRight": space.get("right", 4) * 100, "offsetTop": space.get("top", 1) * 100,
+                      "offsetBottom": space.get("bottom", 1) * 100}
         key = (align, tuple(sorted(margins.items())), ls.type.value, ls.value, tuple(sorted(brk.items())),
-               tuple(sorted(heading.items())), tab_id)
+               tuple(sorted(heading.items())), tab_id, tuple(sorted(border.items())) if border else None)
         pid = self._pp.get(key)
         if pid is not None:
             return pid
         pid = str(self.styles.ensure_paragraph_format(
             base_para_pr_id_ref=0, alignment=align, margins=margins, heading=heading, break_setting=brk,
-            line_spacing=ls, tab_pr_id_ref=tab_id))
+            line_spacing=ls, tab_pr_id_ref=tab_id, border=border))
         self._pp[key] = pid
         return pid
 
@@ -330,8 +338,9 @@ class HwpxWriter:
                 continue
             kind = {"left": "LEFT", "start": "LEFT", "right": "RIGHT", "end": "RIGHT", "center": "CENTER",
                     "decimal": "DECIMAL"}.get(val or "left", "LEFT")
-            lead = {"dot": "DOT", "hyphen": "DASH", "underscore": "SOLID", "middleDot": "DOT"}.get(leader or "",
-                                                                                               "NONE")
+            # Hangul's own conversion writes Word's dot leader as DASH (Hangul draws that as dots)
+            lead = {"dot": "DASH", "middleDot": "DASH", "hyphen": "DOT", "underscore": "SOLID",
+                    "heavy": "SOLID"}.get(leader or "", "NONE")
             # Word measures stops from the text margin, Hangul from the paragraph's left edge
             rel = pos - max(0, left_twips)
             if rel <= 0:
@@ -699,8 +708,50 @@ class HwpxWriter:
                 self.losses.add("image_unsupported")
                 return
             self._img[digest] = item
-        p.add_picture(item, width=emu_hu(img.cx), height=emu_hu(img.cy), treat_as_char=True,
-                      char_pr_id_ref=self.char_shape(img.rpr))
+        cp = self.char_shape(img.rpr)
+        if img.floating and img.anchor:
+            try:
+                self._add_floating_picture(p, item, img, cp)
+                return
+            except Exception:  # noqa: BLE001 - a placement the engine refuses: keep it in the line
+                pass
+            self.losses.add("floating_picture")
+        p.add_picture(item, width=emu_hu(img.cx), height=emu_hu(img.cy), treat_as_char=True, char_pr_id_ref=cp)
+
+    def _add_floating_picture(self, p, item, img: M.Image, cp: str):
+        a = img.anchor
+        wrap = {"square": "SQUARE", "tight": "SQUARE", "through": "SQUARE", "topandbottom": "TOP_AND_BOTTOM",
+                "none": "BEHIND_TEXT" if a.get("behind") else "IN_FRONT_OF_TEXT"}.get(a.get("wrap"), "SQUARE")
+        horz_rel = {"page": "PAPER", "margin": "PAGE", "column": "COLUMN", "character": "PARA",
+                    "leftMargin": "PAPER", "rightMargin": "PAPER", "insideMargin": "PAPER",
+                    "outsideMargin": "PAPER"}.get(a.get("h_rel", "column"), "COLUMN")
+        vert_rel = {"page": "PAPER", "margin": "PAGE", "paragraph": "PARA", "line": "PARA",
+                    "topMargin": "PAPER", "bottomMargin": "PAPER", "insideMargin": "PAPER",
+                    "outsideMargin": "PAPER"}.get(a.get("v_rel", "paragraph"), "PARA")
+        pos = {"horzRelTo": horz_rel, "vertRelTo": vert_rel, "flowWithText": "1" if vert_rel == "PARA" else "0",
+               "allowOverlap": "1" if a.get("overlap") else "0"}
+        if "h_align" in a:
+            pos["horzAlign"] = {"left": "LEFT", "center": "CENTER", "right": "RIGHT", "inside": "INSIDE",
+                                "outside": "OUTSIDE"}.get(a["h_align"], "LEFT")
+            pos["horzOffset"] = 0
+        else:
+            pos["horzAlign"] = "LEFT"
+            pos["horzOffset"] = max(0, a.get("h_off", 0) // 127)
+        if "v_align" in a:
+            pos["vertAlign"] = {"top": "TOP", "center": "CENTER", "bottom": "BOTTOM", "inside": "INSIDE",
+                                "outside": "OUTSIDE"}.get(a["v_align"], "TOP")
+            pos["vertOffset"] = 0
+        else:
+            pos["vertAlign"] = "TOP"
+            pos["vertOffset"] = max(0, a.get("v_off", 0) // 127)
+        if a.get("h_off", 0) < 0 or a.get("v_off", 0) < 0:
+            self.losses.add("floating_picture")  # Hangul offsets cannot point left of / above the frame
+        pic = p.add_picture(item, width=emu_hu(img.cx), height=emu_hu(img.cy), treat_as_char=False,
+                            text_wrap=wrap, pos_overrides=pos, char_pr_id_ref=cp)
+        om = pic.element.find(f"{HP}outMargin") if hasattr(pic, "element") else None
+        if om is not None:
+            for side, key in (("left", "distL"), ("right", "distR"), ("top", "distT"), ("bottom", "distB")):
+                om.set(side, str(max(0, a.get(key, 0) // 127)))
 
     # ---------------------------------------------------------------- tables
     def write_table(self, p, t: M.Table, cp: str):
@@ -804,8 +855,9 @@ class HwpxWriter:
     def ensure_text_run(p, cp):
         el = p.element
         for run in el.findall(f"{HP}run"):
-            if run.find(f"{HP}t") is not None or run.find(f"{HP}pic") is not None \
-                    or run.find(f"{HP}tbl") is not None or run.find(f"{HP}ctrl") is not None:
+            if run.find(f"{HP}t") is not None or run.find(f"{HP}tbl") is not None \
+                    or run.find(f"{HP}ctrl") is not None \
+                    or run.find(f"{HP}pic/{HP}pos[@treatAsChar='1']") is not None:
                 return
         run = etree.SubElement(el, f"{HP}run", {"charPrIDRef": cp})
         etree.SubElement(run, f"{HP}t")
