@@ -48,7 +48,8 @@ KOREAN_FONTS_EN = {
     "noto sans cjk kr", "noto serif cjk kr", "pretendard", "spoqa han sans", "spoqa han sans neo",
     "source han sans k", "source han serif k", "apple sd gothic neo", "hcr batang", "hcr dotum",
     "hancom gothic", "kopubworld batang", "kopubworld dotum", "ms gothic", "ms mincho", "simsun",
-    "microsoft yahei", "meiryo", "yu gothic", "yu mincho", "arial unicode ms",
+    "microsoft yahei", "meiryo", "yu gothic", "yu mincho", "arial unicode ms", "nsimsun", "simhei",
+    "kaiti", "fangsong", "dengxian", "microsoft jhenghei", "pmingliu", "mingliu", "ms pgothic", "ms pmincho",
 }
 
 HIGHLIGHT = {
@@ -99,8 +100,25 @@ def emu_hu(emu) -> int:
     return max(1, int(round(emu / 127)))
 
 
+# Chinese/Japanese font names as Word stores them -> the names a Korean Windows (and Hangul) knows them by
+CJK_FONT_NAMES = {
+    "宋体": "SimSun", "新宋体": "NSimSun", "黑体": "SimHei", "微软雅黑": "Microsoft YaHei", "楷体": "KaiTi",
+    "仿宋": "FangSong", "等线": "DengXian", "宋体-简": "SimSun", "新細明體": "PMingLiU", "細明體": "MingLiU",
+    "微軟正黑體": "Microsoft JhengHei", "ＭＳ 明朝": "MS Mincho", "ＭＳ ゴシック": "MS Gothic",
+    "ＭＳ Ｐ明朝": "MS PMincho", "ＭＳ Ｐゴシック": "MS PGothic", "游ゴシック": "Yu Gothic", "游明朝": "Yu Mincho",
+    "メイリオ": "Meiryo",
+}
+
+
+def font_name(face: str | None) -> str | None:
+    return CJK_FONT_NAMES.get(face, face) if face else face
+
+
 def has_hangul_glyphs(face: str) -> bool:
-    if any("가" <= c <= "힣" or "ㄱ" <= c <= "ㆎ" for c in face):
+    """An East Asian font (Korean, Chinese, Japanese): fit for the HANGUL/HANJA/JAPANESE slots.
+    Latin-only fonts are not; Korean text in them falls back to the default face."""
+    if any("가" <= c <= "힣" or "ㄱ" <= c <= "ㆎ" or "぀" <= c <= "ヿ"
+           or "一" <= c <= "鿿" for c in face):
         return True
     low = face.lower().strip()
     return low in KOREAN_FONTS_EN or low.startswith(("hy", "hancom", "함초롬", "nanum", "noto sans kr",
@@ -204,8 +222,8 @@ class HwpxWriter:
 
     # ---------------------------------------------------------------- shapes
     def char_shape(self, rpr: dict) -> str:
-        ea = rpr.get("font_eastAsia")
-        latin = rpr.get("font_ascii") or rpr.get("font_hAnsi")
+        ea = font_name(rpr.get("font_eastAsia"))
+        latin = font_name(rpr.get("font_ascii") or rpr.get("font_hAnsi"))
         if not ea or not has_hangul_glyphs(ea):
             ea = latin if latin and has_hangul_glyphs(latin) else DEFAULT_FACE
         if not latin:
@@ -451,14 +469,7 @@ class HwpxWriter:
     # ---------------------------------------------------------------- document
     def write(self) -> HwpxDocument:
         secs = self.model.sections
-        self.model_styles_default = M.Paragraph(ppr={}, mark_rpr={})
-        if secs and secs[0].blocks:
-            for b in secs[0].blocks:
-                if isinstance(b, M.Paragraph):
-                    self.model_styles_default = M.Paragraph(ppr={k: v for k, v in b.ppr.items()
-                                                                 if k in ("line", "lineRule")},
-                                                            mark_rpr=b.mark_rpr)
-                    break
+        self.model_styles_default = self.model.default_para or M.Paragraph(ppr={}, mark_rpr={})
         prev_written = None
         hidx = -1
         cur_hdr = {"header": {}, "footer": {}}
@@ -532,6 +543,9 @@ class HwpxWriter:
                                   gutter=hu(m.get("gutter", 0)), section=idx)
         if sec.pg_start is not None:
             self.doc.page.set_start_numbers(page=sec.pg_start, section=idx)
+        if sec.line_pitch:
+            # Word's line grid, as Hangul carries it in its own conversion (section line grid)
+            self.doc.page.set_grid(line_grid=hu(sec.line_pitch), section=idx)
         # note numbers as Hangul gives a converted Word document: plain superscript digits
         for setter in (self.doc.page.set_footnote_shape, self.doc.page.set_endnote_shape):
             try:
@@ -755,6 +769,35 @@ class HwpxWriter:
 
     # ---------------------------------------------------------------- tables
     def write_table(self, p, t: M.Table, cp: str):
+        if not t.rows:
+            return
+        before = len(p.element)
+        try:
+            self._write_table(p, _normalize_grid(t), cp)
+        except Exception:  # noqa: BLE001 - a table shape the engine refuses: keep its contents as paragraphs
+            for child in list(p.element)[before:]:
+                p.element.remove(child)
+            self.losses.add("table_flattened")
+            sink = Sink(self, lambda pp, cp_: self._loose_paragraph(p, pp, cp_))
+            for row in t.rows:
+                for cell in row.cells:
+                    if cell.vmerge != "continue":
+                        self.write_blocks(sink, cell.blocks)
+            sink.close()
+
+    def _loose_paragraph(self, anchor, pp, cp):
+        # never in front of the paragraph that holds the section settings (it must stay first)
+        if anchor.element.find(f"{HP}run/{HP}secPr") is not None:
+            last = getattr(self, "_loose_last", None)
+            q = (last if last is not None and last.element.getparent() is not None else anchor).insert_after("")
+            self._loose_last = q
+        else:
+            q = anchor.insert_before("")
+        q.para_pr_id_ref = pp
+        self.clean_runs(q, cp)
+        return q
+
+    def _write_table(self, p, t: M.Table, cp: str):
         ncols = max([len(t.grid)] + [sum(c.span for c in r.cells) for r in t.rows]) if t.rows else 0
         nrows = len(t.rows)
         if not nrows or not ncols:
@@ -876,6 +919,37 @@ def _has_text(blocks) -> bool:
 def _same_page(a: M.Section, b: M.Section) -> bool:
     return (a.page_w, a.page_h, a.landscape, tuple(sorted(a.margins.items()))) == \
         (b.page_w, b.page_h, b.landscape, tuple(sorted(b.margins.items())))
+
+
+def _normalize_grid(t: M.Table) -> M.Table:
+    """Drop grid columns no cell starts or ends at (every row spans across them): Hangul's table has
+    no such column, so they are folded into their neighbour."""
+    ncols = max([len(t.grid)] + [sum(c.span for c in r.cells) for r in t.rows])
+    bounds = {0, ncols}
+    for row in t.rows:
+        c = 0
+        for cell in row.cells:
+            bounds.add(c)
+            c += cell.span
+            bounds.add(c)
+    bounds = sorted(b for b in bounds if b <= ncols)
+    if len(bounds) - 1 == ncols:
+        return t
+    index = {b: i for i, b in enumerate(bounds)}
+    grid = list(t.grid) + [0] * (ncols - len(t.grid))
+    new_grid = [sum(grid[a:b]) for a, b in zip(bounds, bounds[1:])]
+    rows = []
+    for row in t.rows:
+        cells = []
+        c = 0
+        for cell in row.cells:
+            start, end = index[c], index[c + cell.span]
+            c += cell.span
+            cells.append(M.Cell(blocks=cell.blocks, span=max(1, end - start), vmerge=cell.vmerge,
+                                width=cell.width if end - start == 1 else None, borders=cell.borders,
+                                fill=cell.fill, valign=cell.valign, margins=cell.margins))
+        rows.append(M.Row(cells=cells, height=row.height, height_rule=row.height_rule, header=row.header))
+    return M.Table(grid=new_grid, rows=rows, width=t.width, jc=t.jc, indent=t.indent, cell_margins=t.cell_margins)
 
 
 def _column_widths(t: M.Table, ncols: int) -> list[int]:

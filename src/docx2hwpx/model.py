@@ -117,6 +117,7 @@ class Section:
     title_pg: bool = False
     pg_start: int | None = None
     pg_fmt: str | None = None
+    line_pitch: int | None = None  # docGrid of type lines: every line snaps to this pitch (twips)
     headers: HeaderFooterSet = field(default_factory=HeaderFooterSet)
     footers: HeaderFooterSet = field(default_factory=HeaderFooterSet)
     blocks: list = field(default_factory=list)
@@ -127,3 +128,4 @@ class Document:
     sections: list
     even_odd_headers: bool = False
     numbering: dict = field(default_factory=dict)  # numId -> {ilvl: level dict}
+    default_para: "Paragraph | None" = None  # an empty Normal paragraph (anchor for a table with no text after)

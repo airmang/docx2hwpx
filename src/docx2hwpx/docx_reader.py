@@ -276,7 +276,10 @@ class DocxReader:
         sec = self.section(final, sections[-1] if sections else None)
         sec.blocks = cur
         sections.append(sec)
-        return M.Document(sections=sections, even_odd_headers=self.even_odd, numbering=self.numbering)
+        ppr, _rpr, mark, sid = self.para_props(None, ctx)
+        default = M.Paragraph(ppr=ppr, mark_rpr=mark, style_id=sid)
+        return M.Document(sections=sections, even_odd_headers=self.even_odd, numbering=self.numbering,
+                          default_para=default)
 
     def _block_children(self, parent):
         """Block-level children with content controls and customXml unwrapped."""
@@ -351,6 +354,9 @@ class DocxReader:
             if pn.get(W + "start") is not None:
                 sec.pg_start = to_int(pn.get(W + "start"), 1)
             sec.pg_fmt = pn.get(W + "fmt")
+        grid = sp.find(W + "docGrid")
+        if grid is not None and grid.get(W + "type") in ("lines", "linesAndChars", "snapToChars"):
+            sec.line_pitch = to_int(grid.get(W + "linePitch"), 0) or None
         if sp.find(W + "pgBorders") is not None:
             self.losses.add("page_border")
         if sp.find(W + "lnNumType") is not None:

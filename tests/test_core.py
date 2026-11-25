@@ -285,3 +285,42 @@ def test_large_document_is_fast(tmp_path):
     r = convert(src, tmp_path / "big.hwpx")
     assert r.ok, r.error
     assert r.seconds < 15
+
+
+def test_table_engine_refusal_keeps_cell_text(tmp_path, monkeypatch):
+    from docx2hwpx import writer
+
+    def boom(*_a, **_k):
+        raise ValueError("refused")
+
+    monkeypatch.setattr(writer.HwpxWriter, "_write_table", boom)
+    r = convert(FIX / "s3_table.docx", tmp_path / "t.hwpx")
+    assert r.ok, r.error
+    assert any(l.feature == "table_flattened" for l in r.losses)
+    text = features(r.output)["text"]
+    assert "34,500" in text and "안4" in text
+    assert hwpx.validate_editor_open_safety(str(r.output)).ok
+
+
+def test_floating_picture_keeps_placement(tmp_path):
+    import base64
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    body = ('<w:p><w:r><w:drawing><wp:anchor behindDoc="0" allowOverlap="1"><wp:positionH relativeFrom="margin">'
+            '<wp:align>right</wp:align></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0'
+            '</wp:posOffset></wp:positionV><wp:extent cx="914400" cy="914400"/><wp:wrapSquare wrapText="bothSides"/>'
+            '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill>'
+            '<a:blip r:embed="rIdImg"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor>'
+            '</w:drawing></w:r><w:r><w:t>그림 옆 글</w:t></w:r></w:p>')
+    src = make_docx(tmp_path / "f.docx", body)
+    with zipfile.ZipFile(src, "a") as z:
+        z.writestr("word/media/i.png", png)
+        z.writestr("word/_rels/document.xml.rels",
+                   '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                   'relationships"><Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/'
+                   'officeDocument/2006/relationships/image" Target="media/i.png"/></Relationships>')
+    r = convert(src, tmp_path / "f.hwpx")
+    assert r.ok, r.error
+    sec = zipfile.ZipFile(r.output).read("Contents/section0.xml").decode("utf-8")
+    assert 'textWrap="SQUARE"' in sec and 'treatAsChar="0"' in sec and 'horzAlign="RIGHT"' in sec
+    assert not any(l.feature == "floating_picture" for l in r.losses)

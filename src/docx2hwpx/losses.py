@@ -28,6 +28,7 @@ CATALOG: dict[str, tuple[str, str]] = {
     "line_numbers": ("dropped", "줄 번호 {n}개 구역 설정이 빠졌습니다"),
     "vertical_text": ("changed", "세로 쓰기 {n}곳을 가로 쓰기로 바꿨습니다"),
     "form_control": ("changed", "입력 양식 {n}개를 글자로 바꿨습니다"),
+    "table_flattened": ("changed", "표 {n}개를 옮기지 못해 칸 내용을 문단으로 넣었습니다"),
 }
 
 
