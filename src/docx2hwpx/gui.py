@@ -250,7 +250,7 @@ class App:
         self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="extended", height=8)
         self.tree.heading("file", text="워드 파일")
         self.tree.heading("status", text="상태")
-        self.tree.heading("where", text="저장된 한글 파일")
+        self.tree.heading("where", text="저장된 한글 파일(다른 폴더면 전체 경로)")
         self.tree.column("file", width=330, anchor="w")
         self.tree.column("status", width=90, anchor="center", stretch=False)
         self.tree.column("where", width=330, anchor="w")
@@ -381,7 +381,7 @@ class App:
 
     def _add_item(self, path: Path) -> Item:
         item = Item(source=path)
-        iid = self.tree.insert("", "end", values=(str(path), ST_WAIT, ""))
+        iid = self.tree.insert("", "end", values=(path.name, ST_WAIT, ""))
         item.iid = iid
         self.items[iid] = item
         self.order.append(iid)
@@ -535,13 +535,15 @@ class App:
         it.status = status
         if it.iid not in self.items:
             return
-        where = str(it.output) if it.output and status in (ST_OK, ST_PART) else ""
+        where = ""
+        if it.output and status in (ST_OK, ST_PART):
+            where = it.output.name if it.output.parent == it.source.parent else str(it.output)
         if status == ST_WAIT:
             it.result = None
             it.output = None
             where = ""
         tag = {ST_OK: "ok", ST_PART: "part", ST_FAIL: "fail", ST_RUN: "run"}.get(status, "")
-        self.tree.item(it.iid, values=(str(it.source), status, where), tags=(tag,) if tag else ())
+        self.tree.item(it.iid, values=(it.source.name, status, where), tags=(tag,) if tag else ())
         self._refresh_buttons()
 
     # ---- 자세한 내용, 단추 상태
