@@ -632,7 +632,9 @@ class App:
                   text="워드(.docx) 문서를 한글(.hwpx) 문서로 바꿉니다.\n"
                        "원본 파일은 건드리지 않고, 기존 파일을 덮어쓰지 않습니다.").pack(anchor="w", pady=(12, 0))
         ttk.Label(f, style="Hint.TLabel", justify="left", wraplength=360,
-                  text="[사용권 안내 — 추후 기재]").pack(anchor="w", pady=(12, 0))
+                  text="Apache License 2.0 오픈소스 프로그램입니다.\n"
+                       "함께 들어간 라이브러리의 사용권은 THIRD_PARTY_NOTICES.md 에 있습니다.\n"
+                       "https://github.com/airmang/docx2hwpx").pack(anchor="w", pady=(12, 0))
         ttk.Button(f, text="닫기", command=win.destroy).pack(anchor="e", pady=(16, 0))
         win.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
